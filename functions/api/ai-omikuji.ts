@@ -1,4 +1,4 @@
-const OPENAI_API_URL = "https://api.openai.com/v1/responses"
+import Anthropic from "@anthropic-ai/sdk"
 
 interface GenerateRequest {
   boxName?: string
@@ -13,10 +13,6 @@ interface AiOmikujiMessages {
   dangerKeyword: string
   oracle: string
   luckyItem: string
-}
-
-function pickOutputText(payload: any): string {
-  return payload?.output_text || payload?.output?.[0]?.content?.[0]?.text || ""
 }
 
 function normalizeMessages(value: any): AiOmikujiMessages | null {
@@ -58,8 +54,8 @@ function fallbackMessages(): AiOmikujiMessages {
 }
 
 export async function onRequestPost(context: any) {
-  const apiKey = context.env.OPENAI_API_KEY
-  const model = context.env.OPENAI_OMIKUJI_MODEL || "gpt-4.1-mini"
+  const apiKey = context.env.ANTHROPIC_API_KEY
+  const model = context.env.ANTHROPIC_OMIKUJI_MODEL || "claude-haiku-5-5"
 
   const body = (await context.request.json()) as GenerateRequest
   const boxName = body.boxName || "おみくじ箱"
@@ -69,7 +65,7 @@ export async function onRequestPost(context: any) {
   if (!apiKey) {
     return Response.json({
       ...fallbackMessages(),
-      error: "OPENAI_API_KEY is not set",
+      error: "ANTHROPIC_API_KEY is not set",
     })
   }
 
@@ -169,45 +165,38 @@ export async function onRequestPost(context: any) {
 }`
 
   try {
-    const response = await fetch(OPENAI_API_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        input: prompt,
-        text: {
-          format: {
-            type: "json_schema",
-            name: "ai_omikuji_messages",
-            strict: true,
-            schema: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                dangerKeyword: { type: "string" },
-                oracle: { type: "string" },
-                luckyItem: { type: "string" },
-              },
-              required: ["dangerKeyword", "oracle", "luckyItem"],
+    const client = new Anthropic({ apiKey })
+    const message = await client.messages.create({
+      model,
+      max_tokens: 4000,
+      output_config: {
+        effort: "low",
+        format: {
+          type: "json_schema",
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              dangerKeyword: { type: "string" },
+              oracle: { type: "string" },
+              luckyItem: { type: "string" },
             },
+            required: ["dangerKeyword", "oracle", "luckyItem"],
           },
         },
-        temperature: 0.95,
-      }),
+      },
+      messages: [{ role: "user", content: prompt }],
     })
 
-    if (!response.ok) {
+    if (message.stop_reason === "refusal") {
       return Response.json({
         ...fallbackMessages(),
-        error: "OpenAI API error",
+        error: "Claude refused",
       })
     }
 
-    const payload = await response.json()
-    const outputText = pickOutputText(payload)
+    const textBlock = message.content.find((block) => block.type === "text")
+    const outputText = textBlock?.type === "text" ? textBlock.text : ""
     const parsed = normalizeMessages(JSON.parse(outputText))
 
     return Response.json(parsed || fallbackMessages())

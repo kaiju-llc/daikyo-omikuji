@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 
-const OPENAI_API_URL = "https://api.openai.com/v1/responses"
-const MODEL = process.env.OPENAI_OMIKUJI_MODEL ?? "gpt-4.1-mini"
+import Anthropic from "@anthropic-ai/sdk"
+const MODEL = process.env.ANTHROPIC_OMIKUJI_MODEL ?? "claude-haiku-5-5"
 
 interface GenerateRequest {
   boxName?: string
@@ -16,30 +16,6 @@ interface AiOmikujiMessages {
   dangerKeyword: string
   oracle: string
   luckyItem: string
-}
-
-function pickOutputText(payload: unknown): string {
-  if (!payload || typeof payload !== "object") return ""
-
-  const maybeOutputText = (payload as { output_text?: unknown }).output_text
-  if (typeof maybeOutputText === "string") return maybeOutputText
-
-  const output = (payload as { output?: unknown }).output
-  if (!Array.isArray(output)) return ""
-
-  for (const item of output) {
-    if (!item || typeof item !== "object") continue
-    const content = (item as { content?: unknown }).content
-    if (!Array.isArray(content)) continue
-
-    for (const part of content) {
-      if (!part || typeof part !== "object") continue
-      const text = (part as { text?: unknown }).text
-      if (typeof text === "string") return text
-    }
-  }
-
-  return ""
 }
 
 function normalizeMessages(value: unknown): AiOmikujiMessages | null {
@@ -61,10 +37,10 @@ function normalizeMessages(value: unknown): AiOmikujiMessages | null {
 }
 
 export async function POST(request: Request) {
-  const apiKey = process.env.OPENAI_API_KEY
+  const apiKey = process.env.ANTHROPIC_API_KEY
 
   if (!apiKey) {
-    return NextResponse.json({ error: "OPENAI_API_KEY is not set" }, { status: 500 })
+    return NextResponse.json({ error: "ANTHROPIC_API_KEY is not set" }, { status: 500 })
   }
 
   const body = (await request.json()) as GenerateRequest
@@ -167,55 +143,47 @@ export async function POST(request: Request) {
   "luckyItem": "今日のラッキーアイテム。12文字以内。飲み物と本以外を優先し、具体的で身近なもの。"
 }`
 
-  const response = await fetch(OPENAI_API_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      input: prompt,
-      text: {
-        format: {
-          type: "json_schema",
-          name: "ai_omikuji_messages",
-          strict: true,
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              dangerKeyword: { type: "string" },
-              oracle: { type: "string" },
-              luckyItem: { type: "string" },
-            },
-            required: ["dangerKeyword", "oracle", "luckyItem"],
+  const client = new Anthropic({ apiKey })
+  const message = await client.messages.create({
+    model: MODEL,
+    max_tokens: 4000,
+    output_config: {
+      effort: "low",
+      format: {
+        type: "json_schema",
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            dangerKeyword: { type: "string" },
+            oracle: { type: "string" },
+            luckyItem: { type: "string" },
           },
+          required: ["dangerKeyword", "oracle", "luckyItem"],
         },
       },
-      temperature: 0.95,
-    }),
+    },
+    messages: [{ role: "user", content: prompt }],
   })
 
-  if (!response.ok) {
-    const errorText = await response.text()
-    return NextResponse.json({ error: errorText || "OpenAI request failed" }, { status: response.status })
+  if (message.stop_reason === "refusal") {
+    return NextResponse.json({ error: "Claude refused" }, { status: 502 })
   }
 
-  const payload = await response.json()
-  const outputText = pickOutputText(payload)
+  const textBlock = message.content.find((block) => block.type === "text")
+  const outputText = textBlock?.type === "text" ? textBlock.text : ""
   let parsedJson: unknown
 
   try {
     parsedJson = JSON.parse(outputText)
   } catch {
-    return NextResponse.json({ error: "OpenAI response was not JSON" }, { status: 502 })
+    return NextResponse.json({ error: "Claude response was not JSON" }, { status: 502 })
   }
 
   const parsed = normalizeMessages(parsedJson)
 
   if (!parsed) {
-    return NextResponse.json({ error: "Invalid OpenAI response" }, { status: 502 })
+    return NextResponse.json({ error: "Invalid Claude response" }, { status: 502 })
   }
 
   return NextResponse.json(parsed)

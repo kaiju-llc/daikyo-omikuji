@@ -22,4 +22,8 @@
 
 ## このプロジェクト固有のメモ
 
-(技術スタック・ビルドコマンド・注意点をここに追記していく)
+- **本番URL**: https://daikyo-omikuji-app.pages.dev (Cloudflare Pages。GitHub連携で main に push すると自動公開)
+- **AI(お告げ文)は Claude API に統一**(2026-10-29 hiroさん決定・Notally と同じ)。モデルは `claude-haiku-5-5`。
+  本番は `functions/api/ai-omikuji.ts`、手元確認は `app/api/ai-omikuji/route.ts`。鍵は Cloudflare の秘密 `ANTHROPIC_API_KEY`
+  (手元は `.env.local`)。鍵が無い・失敗したときは用意済みの文章で返す
+- 依存の入れ方: `npx -y pnpm@10 install`(pnpm-workspace.yaml が pnpm 10 形式)。wrangler は Node 22 以上
